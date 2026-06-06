@@ -1,0 +1,58 @@
+name: Daily GeoLite & Geonames Release
+
+on:
+  schedule:
+    - cron: '0 0,12 * * *'
+  workflow_dispatch:
+
+jobs:
+  generate-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -o netbird-helper .
+
+      - name: Generate databases
+        run: ./netbird-helper -o ./output
+
+      - name: Determine release info
+        id: info
+        run: |
+          mmdb=$(ls ./output/GeoLite2-City_*.mmdb | head -1)
+          geonames=$(ls ./output/geonames_*.db | head -1)
+          echo "mmdb_file=$mmdb" >> "$GITHUB_OUTPUT"
+          echo "geonames_file=$geonames" >> "$GITHUB_OUTPUT"
+          version=$(basename "$mmdb" | sed 's/GeoLite2-City_//;s/\.mmdb//')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=geolite-$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check existing release
+        id: check
+        run: |
+          if gh release view "${{ steps.info.outputs.tag }}" --repo "${{ github.repository }}" &>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          gh release create "${{ steps.info.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "GeoLite & Geonames ${{ steps.info.outputs.version }}" \
+            --notes "Auto-generated from NetBird CDN (version ${{ steps.info.outputs.version }})" \
+            "${{ steps.info.outputs.mmdb_file }}" \
+            "${{ steps.info.outputs.geonames_file }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
