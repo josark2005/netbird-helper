@@ -14,47 +14,60 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-
-      - name: Build
-        run: go build -o netbird-helper .
-
-      - name: Generate databases
-        run: ./netbird-helper -o ./output
-
-      - name: Determine release info
-        id: info
+      - name: Get current version from CDN
+        id: version
         run: |
-          mmdb=$(ls ./output/GeoLite2-City_*.mmdb | head -1)
-          geonames=$(ls ./output/geonames_*.db | head -1)
-          echo "mmdb_file=$mmdb" >> "$GITHUB_OUTPUT"
-          echo "geonames_file=$geonames" >> "$GITHUB_OUTPUT"
-          version=$(basename "$mmdb" | sed 's/GeoLite2-City_//;s/\.mmdb//')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=geolite-$version" >> "$GITHUB_OUTPUT"
+          filename=$(curl -sI "https://pkgs.netbird.io/geolocation-dbs/GeoLite2-City/download?suffix=tar.gz" | grep -i "^content-disposition:" | sed 's/.*filename=//;s/\r//;s/"//g')
+          date=$(echo "$filename" | sed 's/^GeoLite2-City_//;s/\..*//')
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+          echo "tag=geolite-$date" >> "$GITHUB_OUTPUT"
 
       - name: Check existing release
         id: check
         run: |
-          if gh release view "${{ steps.info.outputs.tag }}" --repo "${{ github.repository }}" &>/dev/null; then
+          if gh release view "${{ steps.version.outputs.tag }}" --repo "${{ github.repository }}" &>/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ steps.version.outputs.tag }} already exists, skipping."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Restore cached binary
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: netbird-helper
+          key: binary-${{ hashFiles('main.go', 'go.mod', 'go.sum') }}
+
+      - name: Setup Go
+        if: steps.check.outputs.exists == 'false' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        if: steps.check.outputs.exists == 'false' && steps.cache.outputs.cache-hit != 'true'
+        run: go build -o netbird-helper .
+
+      - name: Mark binary executable
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: chmod +x netbird-helper
+
+      - name: Generate databases
+        if: steps.check.outputs.exists == 'false'
+        run: ./netbird-helper -o ./output
+
       - name: Create Release
         if: steps.check.outputs.exists == 'false'
         run: |
-          gh release create "${{ steps.info.outputs.tag }}" \
+          mmdb=$(ls ./output/GeoLite2-City_*.mmdb | head -1)
+          geonames=$(ls ./output/geonames_*.db | head -1)
+          gh release create "${{ steps.version.outputs.tag }}" \
             --repo "${{ github.repository }}" \
-            --title "GeoLite & Geonames ${{ steps.info.outputs.version }}" \
-            --notes "Auto-generated from NetBird CDN (version ${{ steps.info.outputs.version }})" \
-            "${{ steps.info.outputs.mmdb_file }}" \
-            "${{ steps.info.outputs.geonames_file }}"
+            --title "GeoLite & Geonames ${{ steps.version.outputs.date }}" \
+            --notes "Auto-generated from NetBird CDN (version ${{ steps.version.outputs.date }})" \
+            "$mmdb" "$geonames"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
