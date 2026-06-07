@@ -49,3 +49,43 @@ GitHub Actions 工作流（`.github/workflows/daily-release.yml`）每天 UTC �
 4. 如果该日期的 Release 已存在则跳过——不会重复发布
 
 也可通过 GitHub Actions 界面手动触发。
+
+## GitLab CI 自动发布
+
+`.gitlab-ci.yml` 实现了与 GitHub 相同的流程，每天 00:00 和 12:00 UTC 自动运行。
+
+### 启用步骤
+
+**1. 创建 Project Access Token**
+
+Settings → Access Tokens → 添加 Token：
+- Name: `gitlab-release-token`
+- Role: `Maintainer`
+- Scope: 勾选 `api`
+- 生成后复制值
+
+**2. 添加 CI/CD 变量**
+
+Settings → CI/CD → Variables → 添加：
+- Key: `GITLAB_RELEASE_TOKEN`
+- Value: 上一步生成的 token
+- Type: `Variable`
+- Protected: 可选（建议勾选）
+
+**3. 配置定时流水线**
+
+Settings → CI/CD → Schedules → 添加两条：
+| 描述 | Cron |
+|------|------|
+| `Daily 00:00 UTC` | `0 0 * * *` |
+| `Daily 12:00 UTC` | `0 12 * * *` |
+
+Target Branch 选择默认分支，无需额外变量。
+
+### 工作流程
+
+1. 检查 CDN 上的最新版本日期
+2. 通过 GitLab API 查询 `geolite-<date>` 标签是否已存在 → 存在则跳过
+3. 编译二进制（源文件未变时命中缓存）
+4. 生成 MMDB 和 SQLite 数据库
+5. 文件上传至 GitLab，创建 Release（含下载链接）
